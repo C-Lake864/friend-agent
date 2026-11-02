@@ -19,3 +19,8 @@
 선택: langfuse-tracing 브랜치를 push 하고 staging 대상 PR 로 머지해 friend-agent-staging 에 배포한다. Langfuse 비밀키는 사용자가 콘솔에서 Secret Manager 의 langfuse-secret-key 로 만들고, friend-agent-runtime 계정에는 이 시크릿 하나의 읽기 권한만 준다. 공개키와 접속 주소는 일반 환경변수로 넣는다. 배포는 기존 deploy.yml(소스 배포)을 그대로 쓴다. 버린 대안: 로컬에서 version 값을 바꿔 두 버전 흉내 내기, staging 건너뛰기.
 이유: "업데이트한 뒤로 느려졌다"를 확인하려면 실제 리비전 이름(K_REVISION)이 다른 트레이스가 필요하다. 배포 계정, WIF, staging 환경 변수가 이미 준비되어 있다.
 다시 볼 조건: production 에도 키를 넣을 때(트레이스는 environment=production 으로 따로 쌓인다), 교안 G 항목처럼 Actions 에서 이미지를 만드는 방식으로 바꿀 때.
+
+## 2026-11-02 -- 배포 단계에 --clear-base-image 를 더한다
+선택: deploy.yml 배포 단계 flags 에 --clear-base-image 를 더해, 서비스에 남은 "기본 이미지(base image)" 설정을 배포 때마다 지운다. 버린 대안: 두 서비스에서 gcloud 로 한 번만 지우기.
+이유: friend-agent, friend-agent-staging 은 처음에 Dockerfile 없이 소스 배포(기본 이미지 사용)로 만들어져 build-base-image 설정이 남아 있다. 저장소에 Dockerfile 이 들어온 뒤 staging 배포가 "Base image is not supported for services built from Dockerfile" 로 멈췄고, production 에도 같은 설정이 남아 있어 main 머지 때 똑같이 멈춘다. 워크플로에 적어 두면 두 환경 모두 풀리고 이유가 코드에 남는다. 사용자가 추천안을 선택.
+다시 볼 조건: 교안 G 항목처럼 Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(이 옵션이 필요 없어진다).
