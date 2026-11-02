@@ -3,10 +3,19 @@
 OpenAI와 Gemini는 같은 OpenAI SDK로 부르고, 주소(base_url)와 모델 이름만 다르다.
 Claude는 Anthropic SDK로 따로 부른다. 앱 안에서 쓰는 메시지 형식은 OpenAI 형식이라서, ClaudeLLM이 Claude 형식으로 바꿔 보낸다.
 fake 는 키 없이 화면과 흐름을 확인하거나 테스트할 때 쓰는 가짜 응답이다.
+
+세 클래스 모두 호출할 때 record(dict)를 넘기면 모델 이름, 보낸 메시지, 받은 답, 입력·출력 토큰 수를 같은 모양으로 채운다.
+Langfuse 기록(app/tracing.py)은 이 값만 읽으므로, 제공사를 바꿔도 기록이 빠지지 않는다.
 """
 import json
 import re
 import time
+
+
+def note(record, model, messages, output, input_tokens=0, output_tokens=0):
+    if record is not None:
+        record.update(model=model, input=messages, output=output,
+                      usage={"input": input_tokens or 0, "output": output_tokens or 0})
 
 
 class OpenAICompatibleLLM:
@@ -18,25 +27,40 @@ class OpenAICompatibleLLM:
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
         self.model = model
 
-    def complete_json(self, system, user):
+    @staticmethod
+    def _tokens(usage):
+        return (usage.prompt_tokens, usage.completion_tokens) if usage else (0, 0)
+
+    def complete_json(self, system, user, record=None):
         """도구 선택처럼 정해진 형식의 답이 필요할 때. JSON 하나를 받아 dict로 돌려준다."""
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            messages=messages,
             response_format={"type": "json_object"},
         )
-        return json.loads(response.choices[0].message.content)
+        text = response.choices[0].message.content
+        note(record, self.model, messages, text, *self._tokens(getattr(response, "usage", None)))
+        return json.loads(text)
 
-    def complete_text(self, messages):
+    def complete_text(self, messages, record=None):
         response = self.client.chat.completions.create(model=self.model, messages=messages)
-        return response.choices[0].message.content.strip()
+        text = response.choices[0].message.content.strip()
+        note(record, self.model, messages, text, *self._tokens(getattr(response, "usage", None)))
+        return text
 
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, record=None):
         """답을 만들어지는 대로 조금씩 돌려준다(스트리밍)."""
-        response = self.client.chat.completions.create(model=self.model, messages=messages, stream=True)
+        # include_usage 를 켜야 스트림 마지막 조각에 토큰 수가 온다
+        response = self.client.chat.completions.create(model=self.model, messages=messages, stream=True,
+                                                       stream_options={"include_usage": True})
+        text, usage = "", None
         for event in response:
+            usage = getattr(event, "usage", None) or usage
             if event.choices and event.choices[0].delta.content:
+                text += event.choices[0].delta.content
                 yield event.choices[0].delta.content
+        note(record, self.model, messages, text, *self._tokens(usage))
 
 
 class ClaudeLLM:
@@ -84,28 +108,43 @@ class ClaudeLLM:
             return self.REFUSAL_NOTICE
         return "".join(block.text for block in response.content if block.type == "text").strip()
 
-    def complete_json(self, system, user):
+    def _note(self, record, system, turns, output, response):
+        usage = getattr(response, "usage", None)  # 기록용일 뿐이라, 없으면 0으로 두고 답은 그대로 돌려준다
+        note(record, self.model, [{"role": "system", "content": system}, *turns], output,
+             getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0))
+
+    def complete_json(self, system, user, record=None):
         """정해진 형식의 답이 필요할 때. 답에서 JSON 객체 하나를 찾아 dict로 돌려준다."""
         system = system + "\n\n반드시 JSON 객체 하나만 출력한다. 설명이나 코드 블록 표시는 붙이지 않는다."
-        response = self.client.beta.messages.create(**self._request(system, [{"role": "user", "content": user}]))
+        turns = [{"role": "user", "content": user}]
+        response = self.client.beta.messages.create(**self._request(system, turns))
+        text = self._text(response)
+        self._note(record, system, turns, text, response)
         if response.stop_reason == "refusal":
             raise ValueError("Claude가 요청을 거절했습니다.")
-        return parse_json_object(self._text(response))
+        return parse_json_object(text)
 
-    def complete_text(self, messages):
+    def complete_text(self, messages, record=None):
         system, turns = self.to_claude(messages)
-        return self._text(self.client.beta.messages.create(**self._request(system, turns)))
+        response = self.client.beta.messages.create(**self._request(system, turns))
+        text = self._text(response)
+        self._note(record, system, turns, text, response)
+        return text
 
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, record=None):
         """답을 만들어지는 대로 조금씩 돌려준다(스트리밍)."""
         system, turns = self.to_claude(messages)
         with self.client.beta.messages.stream(**self._request(system, turns)) as stream:
-            sent = False
-            for text in stream.text_stream:
+            sent, text = False, ""
+            for chunk in stream.text_stream:
                 sent = True
-                yield text
-            if stream.get_final_message().stop_reason == "refusal" and not sent:
+                text += chunk
+                yield chunk
+            final = stream.get_final_message()
+            if final.stop_reason == "refusal" and not sent:
+                text = self.REFUSAL_NOTICE
                 yield self.REFUSAL_NOTICE
+            self._note(record, system, turns, text, final)
 
 
 def parse_json_object(text):
@@ -150,14 +189,17 @@ class FakeLLM:
             body = "그랬군요. 조금 더 이야기해 줄래요?" if polite else "그랬구나. 조금 더 얘기해 줄래?"
         return f"(가짜 응답) {body}"
 
-    def complete_text(self, messages):
-        return self._reply(messages)
+    def complete_text(self, messages, record=None):
+        text = self._reply(messages)
+        note(record, self.model, messages, text)
+        return text
 
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, record=None):
         text = self._reply(messages)
         for i in range(0, len(text), 4):
             time.sleep(self.delay)
             yield text[i:i + 4]
+        note(record, self.model, messages, text)
 
 
 def make_llm(settings):

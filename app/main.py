@@ -13,12 +13,13 @@ import html
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app import agent, ocr, when
+from app import agent, ocr, tracing, when
 from app.auth import Auth, User
 from app.config import ROOT, load_settings
 from app.llm import make_llm
@@ -31,8 +32,16 @@ settings = load_settings()  # 꼭 필요한 값이 없으면 여기서 종료한
 llm = make_llm(settings)
 store = make_store(settings)
 current_user = Auth(settings)
+log("INFO", "Langfuse 기록", enabled=tracing.enabled())
 
-app = FastAPI(title="AI 친구 에이전트")
+
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    tracing.flush()  # 종료 신호를 받으면 버퍼에 남은 기록을 보내고 끝낸다
+
+
+app = FastAPI(title="AI 친구 에이전트", lifespan=lifespan)
 
 # 시작 지연 스위치(배포 실습용). 포트는 바로 열지만 정한 시간 동안은 준비 중이라 모든 요청에 503을 돌려준다.
 # AI 서비스가 시작할 때 모델 설정이나 색인을 불러오느라 늦게 준비되는 상황을 흉내 낸다. 기본값 0(끔).
