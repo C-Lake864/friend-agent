@@ -11,7 +11,9 @@
 """
 import os
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 MASKED = "[가림]"
 PATTERNS = [
@@ -64,7 +66,8 @@ def client():
             # 키와 주소(LANGFUSE_BASE_URL)는 환경변수에서 읽는다.
             # anthropic SDK 가 스스로 남기는 자동 계측 기록은 보내지 않는다. 모델 호출은 llm.py 의 record 로
             # 제공사와 상관없이 직접 남기므로, 자동 기록까지 보내면 같은 호출의 비용이 두 번 잡힌다.
-            _client = Langfuse(mask=mask, should_export_span=is_langfuse_span)
+            _client = Langfuse(mask=mask, should_export_span=is_langfuse_span,
+                               environment=os.environ.get("ENV", "local").strip().lower() or "local")
         else:
             _client = False
     return _client or None
@@ -74,15 +77,45 @@ def enabled():
     return client() is not None
 
 
+def turn_attrs(uid):
+    """트레이스에 붙일 속성. 한 사람의 하루치 대화를 세션 하나로 본다(docs/decisions.md)."""
+    today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+    return {"user_id": str(uid), "session_id": f"{uid}-{today}",
+            "version": os.environ.get("K_REVISION", "local"),  # Cloud Run 이 리비전 이름을 넣어 준다
+            "tags": [], "metadata": {"commit": os.environ.get("COMMIT_SHA", "local")}}
+
+
+def add_attrs(obs, tags=(), **metadata):
+    """도구 선택처럼 턴 중간에 알게 된 값을, 이 뒤에 만드는 관찰 단위부터 함께 붙인다."""
+    attrs = _attrs.get(id(obs))
+    if attrs is not None:
+        attrs["tags"] = sorted(set(attrs["tags"]) | set(tags))
+        attrs["metadata"].update({key: value for key, value in metadata.items() if value is not None})
+
+
+_attrs = {}  # 열려 있는 관찰 단위 → 속성. 자식을 만들 때마다 같은 속성을 다시 붙인다
+
+
 @contextmanager
-def step(name, parent=None, as_type="span", **fields):
-    """관찰 단위 하나를 열고 닫는다. parent 가 None 이면 새 트레이스의 맨 위가 되고, OFF 면 기록하지 않는다."""
+def step(name, parent=None, as_type="span", attrs=None, **fields):
+    """관찰 단위 하나를 열고 닫는다. parent 가 None 이면 새 트레이스의 맨 위가 되고, OFF 면 기록하지 않는다.
+
+    속성(사용자, 세션, 버전, 태그, metadata)은 맨 위에서 attrs 로 한 번 정하면 자식이 물려받는다.
+    propagate_attributes 는 기록을 만드는 순간의 실행 맥락에만 걸리는데, 스트리밍 제너레이터는 조각마다
+    맥락이 바뀔 수 있어서 자식을 만들 때마다 부모의 속성으로 다시 감싼다.
+    """
     c = client()
     if c is None or parent is OFF:
         yield OFF
         return
+    from langfuse import propagate_attributes
+
     opener = c if parent is None else parent
-    obs = opener.start_observation(name=name, as_type=as_type, **fields)
+    attrs = attrs if parent is None else _attrs.get(id(parent))
+    with propagate_attributes(**attrs) if attrs else nullcontext():
+        obs = opener.start_observation(name=name, as_type=as_type, **fields)
+    if attrs is not None:
+        _attrs[id(obs)] = attrs
     try:
         yield obs
     except Exception as error:
@@ -90,6 +123,7 @@ def step(name, parent=None, as_type="span", **fields):
         raise
     finally:
         obs.end()
+        _attrs.pop(id(obs), None)
 
 
 def model_fields(record):

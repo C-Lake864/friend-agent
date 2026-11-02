@@ -39,7 +39,7 @@ def system_prompt(character, now, location, memories, summary, tool_lines=(), cl
 
 
 def run_turn(message, uid, llm, store, show_panel):
-    with tracing.step("chat-turn", input=message) as trace:
+    with tracing.step("chat-turn", input=message, attrs=tracing.turn_attrs(uid)) as trace:
         yield from _turn(message, uid, llm, store, show_panel, trace)
 
 
@@ -55,6 +55,7 @@ def _turn(message, uid, llm, store, show_panel, trace):
     with tracing.step("safety", trace, input=message) as obs:
         crisis = is_crisis(message)
         obs.update(output={"crisis": crisis})
+    tracing.add_attrs(trace, tags=["safety"] if crisis else [], safety=crisis)
     if crisis:
         guards = ["위기 표현이 있어 캐릭터 설정과 상관없이 정해진 안전 응답을 보냈습니다."]
         if show_panel:
@@ -75,6 +76,10 @@ def _turn(message, uid, llm, store, show_panel, trace):
                    output={"tools": choice.tools, "action": choice.action},
                    metadata={"confidence": choice.confidence, "decided_by": choice.decided_by,
                              "reason": choice.reason, "guards": choice.guards})
+    tool_names = [t["name"] for t in choice.tools]
+    tracing.add_attrs(trace, tags=tool_names, tools=",".join(tool_names) or "none",
+                      confidence=round(choice.confidence, 2))
+    trace.update(metadata={"tools": tool_names, "confidence": choice.confidence, "safety": False})
     if show_panel:
         yield {"type": "turn", "tools": [{"name": t["name"], "label": TOOLS[t["name"]]["label"], "args": t["args"]}
                                          for t in choice.tools],
@@ -153,7 +158,7 @@ def greet(uid, llm, store):
     if not last:
         guide.append("처음 만난 사이다. 이름을 넣어 짧게 자기소개를 한다.")
     system += "\n\n[먼저 말 걸기]\n" + " ".join(guide)
-    with tracing.step("greeting", as_type="generation") as obs:  # 먼저 말 걸기는 따로 트레이스 하나
+    with tracing.step("greeting", as_type="generation", attrs=tracing.turn_attrs(uid)) as obs:  # 따로 트레이스 하나
         record = {}
         text = llm.complete_text([{"role": "system", "content": system},
                                   {"role": "user", "content": "(앱을 열었다. 먼저 말을 걸어 줘)"}], record=record)
