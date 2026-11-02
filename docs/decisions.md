@@ -44,3 +44,8 @@
 선택: friend-agent-builder 서비스 계정을 만들어 roles/run.builder 하나만 주고, 배포 계정(friend-agent-deployer)은 이 계정 하나에만 iam.serviceAccountUser 를 받는다. deploy.yml 배포 단계 flags 에 --build-service-account 로 저장소 변수 BUILD_SA 를 넘긴다. 버린 대안: squirrel-garden-builder 같이 쓰기, 기본 compute 계정을 대신 쓸 권한 주기.
 이유: staging 배포가 "caller does not have permission to act as service account"(기본 compute 계정)로 멈췄다. 기본 compute 계정은 프로젝트 roles/editor 를 갖고 있어, 그 계정을 대신 쓸 권한을 주면 배포 계정이 사실상 편집자가 된다(AGENTS.md 의 넓은 역할 금지). 다람쥐 정원과 같은 방식이고, 앱마다 계정을 나눠 권한이 섞이지 않게 한다. 사용자가 추천안을 선택.
 다시 볼 조건: Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(빌드 계정이 필요 없어진다).
+
+## 2026-11-02 -- Langfuse 트레이스는 들어온 요청의 추적 맥락과 끊고 시작한다
+선택: chat-turn, greeting 처럼 맨 위 기록을 만들 때 OpenTelemetry 빈 맥락에서 시작한다(tracing.step). 버린 대안: FastAPI 를 내장 계측이 없는 버전으로 고정, 둘 다 하기.
+이유: staging 에서 flush 를 넣은 뒤에도 트레이스가 리비전마다 절반쯤 빠졌다. LANGFUSE_DEBUG 로그에서 빠진 요청은 FastAPI 요청 기록과 Langfuse 기록이 함께 만들어지지 않았다. FastAPI 0.162 는 OpenTelemetry 계측이 내장돼 요청 헤더의 traceparent 를 이어받고, Cloud Run 은 요청 일부만 "기록함"(sampled=01)으로 표시한다. 로컬에서 같은 요청에 sampled=00 헤더를 붙이면 트레이스가 사라지고 01 은 들어오는 것으로 재현했다. 맥락을 끊으면 두 경우 모두 들어온다. 사용자가 추천안을 선택.
+다시 볼 조건: Langfuse 트레이스를 Google Cloud Trace 와 이어 보고 싶을 때(그때는 맥락을 이어받되 샘플링 판정을 따로 다뤄야 한다). 앞선 "응답 전 flush" 결정은 Cloud Run 의 CPU 제한 때문에 여전히 필요하다.

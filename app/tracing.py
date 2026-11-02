@@ -103,17 +103,27 @@ def step(name, parent=None, as_type="span", attrs=None, **fields):
     속성(사용자, 세션, 버전, 태그, metadata)은 맨 위에서 attrs 로 한 번 정하면 자식이 물려받는다.
     propagate_attributes 는 기록을 만드는 순간의 실행 맥락에만 걸리는데, 스트리밍 제너레이터는 조각마다
     맥락이 바뀔 수 있어서 자식을 만들 때마다 부모의 속성으로 다시 감싼다.
+
+    맨 위 기록은 들어온 요청의 추적 맥락과 끊고 빈 맥락에서 시작한다. FastAPI(0.162~)는 요청 헤더의
+    traceparent 를 이어받는데, Cloud Run 은 요청 일부만 "기록함"으로 표시한다. 그 아래에 만들면
+    "기록 안 함" 요청의 트레이스가 통째로 사라진다(staging 에서 절반쯤 빠졌던 원인).
     """
     c = client()
     if c is None or parent is OFF:
         yield OFF
         return
     from langfuse import propagate_attributes
+    from opentelemetry import context as otel_context
 
     opener = c if parent is None else parent
     attrs = attrs if parent is None else _attrs.get(id(parent))
-    with propagate_attributes(**attrs) if attrs else nullcontext():
-        obs = opener.start_observation(name=name, as_type=as_type, **fields)
+    token = otel_context.attach(otel_context.Context()) if parent is None else None
+    try:
+        with propagate_attributes(**attrs) if attrs else nullcontext():
+            obs = opener.start_observation(name=name, as_type=as_type, **fields)
+    finally:
+        if token is not None:
+            otel_context.detach(token)
     if attrs is not None:
         _attrs[id(obs)] = attrs
     try:
