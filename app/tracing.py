@@ -133,6 +133,22 @@ def model_fields(record):
     return {"model": record["model"], "input": record["input"], "usage_details": record["usage"]}
 
 
+def trace_id(obs):
+    """메시지에 함께 저장해 둘 트레이스 ID. 기록이 꺼져 있으면 None."""
+    return getattr(obs, "trace_id", None)
+
+
+def score(trace, name, value, comment=None):
+    """사용자 반응을 트레이스에 BOOLEAN 점수(1 또는 0)로 붙인다. 키나 트레이스 ID가 없으면 건너뛰고 False.
+    근거 문서: https://langfuse.com/docs/evaluation/evaluation-methods/scores-via-sdk"""
+    c = client()
+    if c is None or not trace:
+        return False
+    c.create_score(name=name, value=float(value), trace_id=trace, data_type="BOOLEAN",
+                   comment=mask_text(comment)[:500] if comment else None)  # 신고 사유도 보내기 전에 가린다
+    return True
+
+
 def flush():
     c = client()
     if c is not None:

@@ -24,3 +24,8 @@
 선택: deploy.yml 배포 단계 flags 에 --clear-base-image 를 더해, 서비스에 남은 "기본 이미지(base image)" 설정을 배포 때마다 지운다. 버린 대안: 두 서비스에서 gcloud 로 한 번만 지우기.
 이유: friend-agent, friend-agent-staging 은 처음에 Dockerfile 없이 소스 배포(기본 이미지 사용)로 만들어져 build-base-image 설정이 남아 있다. 저장소에 Dockerfile 이 들어온 뒤 staging 배포가 "Base image is not supported for services built from Dockerfile" 로 멈췄고, production 에도 같은 설정이 남아 있어 main 머지 때 똑같이 멈춘다. 워크플로에 적어 두면 두 환경 모두 풀리고 이유가 코드에 남는다. 사용자가 추천안을 선택.
 다시 볼 조건: 교안 G 항목처럼 Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(이 옵션이 필요 없어진다).
+
+## 2026-11-02 -- 화면 반응은 메시지 meta 의 트레이스 ID 로 잇고, /api/feedback 을 새로 만든다
+선택: 답을 저장할 때 meta 에 Langfuse 트레이스 ID 를 함께 넣고, 반응이 오면 서버가 (로그인한 사용자, 메시지 ID)로 메시지를 찾아 트레이스 ID 를 꺼낸다. 좋아요, 별로예요는 새 API /api/feedback 으로 받아 user-feedback(BOOLEAN 1/0) 점수로, 기존 /api/report 는 주소와 입력을 그대로 두고 report(BOOLEAN 1) 점수와 사유(comment, 마스킹)를 더 보낸다. 저장소에 get_message(uid, id) 를 더한다. 버린 대안: done 이벤트에 트레이스 ID 를 실어 화면이 들고 있기, /api/report 하나로 반응 종류를 받기.
+이유: 서버가 찾은 메시지에서 트레이스 ID 를 꺼내므로 브라우저가 남의 트레이스 ID 를 끼워 넣을 수 없고, 화면을 다시 열어도 이어진다. 신고와 반응은 하는 일이 달라 API 를 나눈다. 사용자가 추천안을 선택.
+다시 볼 조건: 이 변경 전에 저장된 메시지에는 트레이스 ID 가 없어 점수가 붙지 않는다(scored=false 로 응답). 반응 종류가 늘어 점수 이름이 많아질 때.
