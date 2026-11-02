@@ -14,3 +14,8 @@
 선택: session_id 를 "사용자 ID + 한국 날짜(YYYY-MM-DD)" 로 만들어 한 사람의 하루치 대화를 세션 하나로 본다. 버린 대안: 마지막 대화에서 6시간 넘게 쉬면 새 세션.
 이유: 이 서비스에는 대화방이 따로 없고 대화가 계속 이어진다. 날짜로 나누면 저장소를 더 읽지 않아도 되고, "어제 저녁" 같은 제보를 날짜로 바로 찾을 수 있다.
 다시 볼 조건: 자정 전후로 이어지는 대화를 한 묶음으로 봐야 할 때, 사용자 시간대가 한국 밖으로 넓어질 때.
+
+## 2026-11-02 -- Langfuse 계측을 staging 에 올려 리비전별로 비교한다
+선택: langfuse-tracing 브랜치를 push 하고 staging 대상 PR 로 머지해 friend-agent-staging 에 배포한다. Langfuse 비밀키는 사용자가 콘솔에서 Secret Manager 의 langfuse-secret-key 로 만들고, friend-agent-runtime 계정에는 이 시크릿 하나의 읽기 권한만 준다. 공개키와 접속 주소는 일반 환경변수로 넣는다. 배포는 기존 deploy.yml(소스 배포)을 그대로 쓴다. 버린 대안: 로컬에서 version 값을 바꿔 두 버전 흉내 내기, staging 건너뛰기.
+이유: "업데이트한 뒤로 느려졌다"를 확인하려면 실제 리비전 이름(K_REVISION)이 다른 트레이스가 필요하다. 배포 계정, WIF, staging 환경 변수가 이미 준비되어 있다.
+다시 볼 조건: production 에도 키를 넣을 때(트레이스는 environment=production 으로 따로 쌓인다), 교안 G 항목처럼 Actions 에서 이미지를 만드는 방식으로 바꿀 때.
