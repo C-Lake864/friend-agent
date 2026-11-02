@@ -24,3 +24,8 @@
 선택: deploy.yml 배포 단계 flags 에 --clear-base-image 를 더해, 서비스에 남은 "기본 이미지(base image)" 설정을 배포 때마다 지운다. 버린 대안: 두 서비스에서 gcloud 로 한 번만 지우기.
 이유: friend-agent, friend-agent-staging 은 처음에 Dockerfile 없이 소스 배포(기본 이미지 사용)로 만들어져 build-base-image 설정이 남아 있다. 저장소에 Dockerfile 이 들어온 뒤 staging 배포가 "Base image is not supported for services built from Dockerfile" 로 멈췄고, production 에도 같은 설정이 남아 있어 main 머지 때 똑같이 멈춘다. 워크플로에 적어 두면 두 환경 모두 풀리고 이유가 코드에 남는다. 사용자가 추천안을 선택.
 다시 볼 조건: 교안 G 항목처럼 Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(이 옵션이 필요 없어진다).
+
+## 2026-11-02 -- 소스 배포 빌드는 friend-agent-builder 계정으로 한다
+선택: friend-agent-builder 서비스 계정을 만들어 roles/run.builder 하나만 주고, 배포 계정(friend-agent-deployer)은 이 계정 하나에만 iam.serviceAccountUser 를 받는다. deploy.yml 배포 단계 flags 에 --build-service-account 로 저장소 변수 BUILD_SA 를 넘긴다. 버린 대안: squirrel-garden-builder 같이 쓰기, 기본 compute 계정을 대신 쓸 권한 주기.
+이유: staging 배포가 "caller does not have permission to act as service account"(기본 compute 계정)로 멈췄다. 기본 compute 계정은 프로젝트 roles/editor 를 갖고 있어, 그 계정을 대신 쓸 권한을 주면 배포 계정이 사실상 편집자가 된다(AGENTS.md 의 넓은 역할 금지). 다람쥐 정원과 같은 방식이고, 앱마다 계정을 나눠 권한이 섞이지 않게 한다. 사용자가 추천안을 선택.
+다시 볼 조건: Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(빌드 계정이 필요 없어진다).
