@@ -77,6 +77,11 @@ class ReportRequest(BaseModel):
     reason: str = ""
 
 
+class FeedbackRequest(BaseModel):
+    message_id: int
+    liked: bool  # 좋아요 true, 별로예요 false
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     page = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -175,13 +180,19 @@ def chat(req: ChatRequest, user: User = Depends(current_user), model=Depends(get
         except Exception as error:
             log("ERROR", "대화 처리 실패", error=type(error).__name__)
             yield json.dumps({"type": "error", "message": "답을 만들지 못했어요. 잠시 뒤 다시 보내 주세요."}, ensure_ascii=False) + "\n"
+        finally:
+            # Cloud Run 은 응답이 끝나면 CPU를 거의 주지 않아, SDK가 모아 둔 기록을 못 보내고 잃을 수 있다.
+            # 응답을 닫기 전에 보낸다. 대가는 응답이 아주 조금 늦게 닫히는 것이다.
+            tracing.flush()
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.post("/api/greeting")
 def greeting(user: User = Depends(current_user), model=Depends(get_llm)):
-    return {"greeting": agent.greet(user.id, model, store)}
+    result = agent.greet(user.id, model, store)
+    tracing.flush()
+    return {"greeting": result}
 
 
 @app.post("/api/ocr")
@@ -194,11 +205,29 @@ async def read_photo(photo: UploadFile, user: User = Depends(current_user)):
         raise HTTPException(500, str(error)) from error
 
 
+def my_answer(user, message_id):
+    """로그인한 사용자의 캐릭터 답만 돌려준다. 남의 메시지나 내 메시지(user)에는 반응을 받지 않는다."""
+    message = store.get_message(user.id, message_id)
+    if not message or message["role"] != "assistant":
+        raise HTTPException(404, "반응을 남길 수 있는 답을 찾지 못했습니다")
+    return message
+
+
 @app.post("/api/report")
 def report(req: ReportRequest, user: User = Depends(current_user)):
-    # 지금은 로그로만 남긴다. 관측 도구를 붙이면 그 도구의 점수로 보낸다.
+    message = my_answer(user, req.message_id)
     log("WARNING", "부적절한 답변 신고", message_id=req.message_id, reason_length=len(req.reason))
-    return {"ok": True}
+    scored = tracing.score(message["meta"].get("trace_id"), "report", 1, comment=req.reason.strip() or None)
+    return {"ok": True, "scored": scored}
+
+
+@app.post("/api/feedback")
+def feedback(req: FeedbackRequest, user: User = Depends(current_user)):
+    """답 옆의 좋아요, 별로예요. Langfuse 점수 user-feedback(BOOLEAN)으로 보낸다."""
+    message = my_answer(user, req.message_id)
+    log("INFO", "답 반응", message_id=req.message_id, liked=req.liked)
+    scored = tracing.score(message["meta"].get("trace_id"), "user-feedback", 1 if req.liked else 0)
+    return {"ok": True, "scored": scored}
 
 
 # ── 기억, 약속, 내 데이터 ───────────────────────────────────────────

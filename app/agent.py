@@ -62,7 +62,8 @@ def _turn(message, uid, llm, store, show_panel, trace):
             yield {"type": "turn", "tools": [], "confidence": None, "reason": "", "decided_by": "rule",
                    "action": "safety", "guards": guards}
         yield {"type": "delta", "text": CRISIS_REPLY}
-        saved = store.add_message(uid, "assistant", CRISIS_REPLY, {"action": "safety", "guards": guards})
+        saved = store.add_message(uid, "assistant", CRISIS_REPLY, {"action": "safety", "guards": guards,
+                                                                   "trace_id": tracing.trace_id(trace)})
         log("WARNING", "위기 표현 안전 응답")
         trace.update(output=CRISIS_REPLY, metadata={"message_id": saved["id"], "action": "safety"})
         yield {"type": "done", "message_id": saved["id"]}
@@ -119,7 +120,8 @@ def _turn(message, uid, llm, store, show_panel, trace):
             yield {"type": "delta", "text": chunk}
         obs.update(**tracing.model_fields(record), output=reply)
     meta = {"tools": [t["name"] for t in choice.tools], "confidence": choice.confidence,
-            "action": choice.action, "guards": choice.guards}
+            "action": choice.action, "guards": choice.guards,
+            "trace_id": tracing.trace_id(trace)}  # 화면의 반응(좋아요, 별로예요, 신고)을 이 트레이스의 점수로 붙인다
     saved = store.add_message(uid, "assistant", reply, meta)
     trace.update(output=reply, metadata={"message_id": saved["id"]})
 
@@ -163,6 +165,7 @@ def greet(uid, llm, store):
         text = llm.complete_text([{"role": "system", "content": system},
                                   {"role": "user", "content": "(앱을 열었다. 먼저 말을 걸어 줘)"}], record=record)
         obs.update(**tracing.model_fields(record), output=text, metadata={"reminders": len(due)})
-    saved = store.add_message(uid, "assistant", text, {"action": "greeting", "reminders": [r["id"] for r in due]})
+    saved = store.add_message(uid, "assistant", text, {"action": "greeting", "reminders": [r["id"] for r in due],
+                                                       "trace_id": tracing.trace_id(obs)})
     log("INFO", "먼저 말 걸기", reminders=len(due))
     return {"id": saved["id"], "text": text, "reminders": [r["text"] for r in due]}
