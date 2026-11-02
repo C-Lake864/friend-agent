@@ -39,3 +39,8 @@
 선택: friend-agent-staging 에 LLM_PROVIDER=claude, LLM_MODEL=claude-haiku-5-5 를 --update-env-vars 로 더한다(서비스 설정, 코드 변경 없음). 버린 대안: 그대로 두기.
 이유: staging 이 모든 메시지에 "답을 만들지 못했어요"를 돌려줬다. 로그와 Langfuse 트레이스 모두 AuthenticationError. staging 은 production 과 같은 llm-api-key(Claude 키)를 쓰는데 LLM_PROVIDER 가 없어 기본값 openai 로 보내고 있었다. 사용자가 추천안을 선택.
 다시 볼 조건: staging 과 production 의 모델을 일부러 다르게 시험하고 싶을 때.
+
+## 2026-11-02 -- 소스 배포 빌드는 friend-agent-builder 계정으로 한다
+선택: friend-agent-builder 서비스 계정을 만들어 roles/run.builder 하나만 주고, 배포 계정(friend-agent-deployer)은 이 계정 하나에만 iam.serviceAccountUser 를 받는다. deploy.yml 배포 단계 flags 에 --build-service-account 로 저장소 변수 BUILD_SA 를 넘긴다. 버린 대안: squirrel-garden-builder 같이 쓰기, 기본 compute 계정을 대신 쓸 권한 주기.
+이유: staging 배포가 "caller does not have permission to act as service account"(기본 compute 계정)로 멈췄다. 기본 compute 계정은 프로젝트 roles/editor 를 갖고 있어, 그 계정을 대신 쓸 권한을 주면 배포 계정이 사실상 편집자가 된다(AGENTS.md 의 넓은 역할 금지). 다람쥐 정원과 같은 방식이고, 앱마다 계정을 나눠 권한이 섞이지 않게 한다. 사용자가 추천안을 선택.
+다시 볼 조건: Actions 에서 이미지를 만들어 image 로 배포하도록 바꿀 때(빌드 계정이 필요 없어진다).
