@@ -34,3 +34,8 @@
 선택: /api/chat 스트림이 끝날 때(finally), /api/greeting 과 점수를 보낸 직후에 tracing.flush() 를 부른다. 버린 대안: SDK 기본값대로 5초마다 백그라운드로 보내기, Cloud Run 에서 CPU 항상 할당(always-on CPU) 켜기.
 이유: staging(00003)에 메시지 7개를 보냈는데 트레이스는 1개만 들어왔다. Cloud Run 은 응답이 끝나면 CPU 를 거의 주지 않아 버퍼에 남은 기록을 보내지 못한다(교안 섹션 7). CPU 항상 할당은 요금이 늘어난다. 응답이 닫히는 시간이 조금 늘어나지만 사용자가 첫 글자를 기다리는 시간에는 들어가지 않는다.
 다시 볼 조건: 트래픽이 늘어 flush 시간이 응답 종료를 눈에 띄게 늦출 때.
+
+## 2026-11-02 -- staging 의 LLM 설정을 production 과 맞춘다
+선택: friend-agent-staging 에 LLM_PROVIDER=claude, LLM_MODEL=claude-haiku-5-5 를 --update-env-vars 로 더한다(서비스 설정, 코드 변경 없음). 버린 대안: 그대로 두기.
+이유: staging 이 모든 메시지에 "답을 만들지 못했어요"를 돌려줬다. 로그와 Langfuse 트레이스 모두 AuthenticationError. staging 은 production 과 같은 llm-api-key(Claude 키)를 쓰는데 LLM_PROVIDER 가 없어 기본값 openai 로 보내고 있었다. 사용자가 추천안을 선택.
+다시 볼 조건: staging 과 production 의 모델을 일부러 다르게 시험하고 싶을 때.
