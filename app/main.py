@@ -180,13 +180,19 @@ def chat(req: ChatRequest, user: User = Depends(current_user), model=Depends(get
         except Exception as error:
             log("ERROR", "대화 처리 실패", error=type(error).__name__)
             yield json.dumps({"type": "error", "message": "답을 만들지 못했어요. 잠시 뒤 다시 보내 주세요."}, ensure_ascii=False) + "\n"
+        finally:
+            # Cloud Run 은 응답이 끝나면 CPU를 거의 주지 않아, SDK가 모아 둔 기록을 못 보내고 잃을 수 있다.
+            # 응답을 닫기 전에 보낸다. 대가는 응답이 아주 조금 늦게 닫히는 것이다.
+            tracing.flush()
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.post("/api/greeting")
 def greeting(user: User = Depends(current_user), model=Depends(get_llm)):
-    return {"greeting": agent.greet(user.id, model, store)}
+    result = agent.greet(user.id, model, store)
+    tracing.flush()
+    return {"greeting": result}
 
 
 @app.post("/api/ocr")

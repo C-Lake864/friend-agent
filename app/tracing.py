@@ -146,6 +146,7 @@ def score(trace, name, value, comment=None):
         return False
     c.create_score(name=name, value=float(value), trace_id=trace, data_type="BOOLEAN",
                    comment=mask_text(comment)[:500] if comment else None)  # 신고 사유도 보내기 전에 가린다
+    c.flush()  # Cloud Run 에서 응답 뒤에 잃지 않게 바로 보낸다
     return True
 
 
