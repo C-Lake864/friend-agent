@@ -138,6 +138,33 @@ class SupabaseStore:
                             user_id=f"eq.{uid}", status="eq.pending", due_at=f"lte.{iso(now)}")
         return [self._reminder(r) for r in rows]
 
+    # 크레딧 원장
+    def credit_balance(self, uid):
+        """Data API 는 기본 설정에서 합계를 계산해 주지 않아서 delta 를 가져와 더한다.
+        Supabase 는 한 번에 최대 1000행만 돌려주므로 나눠 가져온다."""
+        total, offset, page = 0, 0, 1000
+        while True:
+            rows = self._get("credit_ledger", user_id=f"eq.{uid}", select="delta", order="id.asc",
+                             limit=page, offset=offset)
+            total += sum(r["delta"] for r in rows)
+            if len(rows) < page:
+                return total
+            offset += page
+
+    def add_credit(self, uid, delta, reason, ref):
+        """기록을 하나 더한다. 같은 ref 가 이미 있으면 더하지 않고 False(ref 의 unique 조건)."""
+        r = self.http.post("/credit_ledger", params={"on_conflict": "ref"},
+                           json={"user_id": uid, "delta": int(delta), "reason": reason, "ref": ref},
+                           headers={"Prefer": "return=representation,resolution=ignore-duplicates"})
+        r.raise_for_status()
+        return bool(r.json())
+
+    def recent_credits(self, uid, limit):
+        """최근 기록부터."""
+        rows = self._get("credit_ledger", user_id=f"eq.{uid}", select="id,delta,reason,ref,created_at",
+                         order="id.desc", limit=limit)
+        return [{**r, "created_at": parse_time(r["created_at"])} for r in rows]
+
     def delete_all(self, uid):
         for table in ("messages", "summaries", "memories", "reminders", "characters", "user_settings"):
             self._delete(table, user_id=f"eq.{uid}")

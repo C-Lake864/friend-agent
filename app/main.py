@@ -8,6 +8,7 @@
 - /api/greeting: 앱을 열 때 먼저 말 걸기
 - /api/ocr: 사진 속 글자 읽기(OCR_ENABLED=true 일 때)
 - /api/memories, /api/reminders, /api/data: 기억, 약속, 내 데이터 관리
+- /api/credits: 크레딧 잔액과 최근 기록
 """
 import html
 import json
@@ -25,6 +26,7 @@ from app.config import ROOT, load_settings
 from app.llm import make_llm
 from app.logs import log
 from app.persona import DEFAULT_CHARACTER, OPTIONS, build_persona, clean_character
+from app.safety import is_crisis
 from app.store.base import make_store
 from app.tools import CITIES
 
@@ -167,15 +169,51 @@ def messages(user: User = Depends(current_user)):
             for m in store.recent_messages(user.id, 50)]
 
 
+# ── 크레딧 ─────────────────────────────────────────────────────────
+# 메시지 한 턴에 1. 답을 끝까지 만든 뒤(done)에만 빼므로, 중간에 실패하면 빠지지 않는다.
+# 위기 표현에는 잔액과 상관없이 안전 응답을 보내고 빼지 않는다(docs/decisions.md).
+FREE_CREDITS = 50
+CHAT_COST = 1
+NO_CREDITS_MESSAGE = "크레딧이 부족합니다. 충전 후 이용해 주세요."
+
+
+def credit_balance(uid):
+    # 처음 온 사용자에게 무료 크레딧을 준다. 두 번째부터는 ref 가 같아서 더해지지 않는다
+    store.add_credit(uid, FREE_CREDITS, "signup", f"signup:{uid}")
+    return store.credit_balance(uid)
+
+
+@app.get("/api/credits")
+def credits(user: User = Depends(current_user)):
+    balance = credit_balance(user.id)
+    return {"balance": balance,
+            "history": [{"delta": c["delta"], "reason": c["reason"], "ref": c["ref"],
+                         "created_at": c["created_at"].isoformat()} for c in store.recent_credits(user.id, 10)]}
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, user: User = Depends(current_user), model=Depends(get_llm)):
     message = req.message.strip()[:1000]
     if not message:
         raise HTTPException(400, "메시지가 비어 있습니다")
+    crisis = is_crisis(message)
+    balance = credit_balance(user.id)
+    if balance < CHAT_COST and not crisis:
+        log("INFO", "크레딧 부족 거절")
+        return JSONResponse({"error": "insufficient_credits", "message": NO_CREDITS_MESSAGE, "balance": balance},
+                            status_code=402)
+
+    def charge(message_id):
+        try:
+            store.add_credit(user.id, -CHAT_COST, "chat", f"chat:{message_id}")
+        except Exception as error:  # 답은 이미 보냈으니 차감 실패로 턴을 실패시키지 않는다
+            log("ERROR", "크레딧 차감 실패", error=type(error).__name__)
 
     def events():
         try:
             for event in agent.run_turn(message, user.id, model, store, settings.show_turn_panel):
+                if event["type"] == "done" and not crisis:
+                    charge(event["message_id"])  # done 을 보내기 전에 빼서, 화면이 바로 새 잔액을 읽게 한다
                 yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
         except Exception as error:
             log("ERROR", "대화 처리 실패", error=type(error).__name__)
