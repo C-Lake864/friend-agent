@@ -61,7 +61,7 @@ body.has-banner .app{height:calc(100dvh - 32px)}
 .topbar .t{font-weight:800}
 .topbar .s{font-size:12px;color:var(--ink-3)}
 .ai-badge{margin-left:auto;font-size:12px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line);padding:4px 10px;border-radius:999px}
-.credits{margin-left:8px;font-size:12px;font-weight:600;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line);padding:4px 10px;border-radius:999px;white-space:nowrap}
+.credits{cursor:pointer;margin-left:8px;font-size:12px;font-weight:600;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line);padding:4px 10px;border-radius:999px;white-space:nowrap}
 .credits.empty{color:#b42318;border-color:#f3b8b2;background:#fff4f2}
 .menu-btn,.panel-btn{display:none;border:1px solid var(--line);background:#fff;border-radius:10px;padding:6px 10px;font-size:13px;font-weight:600}
 
@@ -227,7 +227,7 @@ textarea.input{min-height:80px;resize:vertical}
       <div class="ava" id="topAva">🐻</div>
       <div><div class="t" id="topName">하루</div><div class="s" id="topSub">대화</div></div>
       <span class="ai-badge">AI 캐릭터와의 대화입니다</span>
-      <span class="credits" id="credits" title="남은 크레딧" hidden></span>
+      <button class="credits" id="credits" title="남은 크레딧 · 눌러서 충전" hidden></button>
       <button class="panel-btn" id="panelBtn">이번 턴</button>
     </header>
 
@@ -287,6 +287,19 @@ textarea.input{min-height:80px;resize:vertical}
       <div class="card"><h3>약속</h3><div class="list" id="remList"></div></div>
       <div class="card danger"><h3>내 데이터</h3><p class="lead" style="margin:0 0 12px">캐릭터, 대화, 기억, 약속을 모두 지웁니다. 되돌릴 수 없습니다.</p>
         <div class="actions" style="justify-content:flex-start"><button class="btn" id="deleteAll">내 데이터 모두 삭제</button></div></div>
+    </div></section>
+
+    <!-- 크레딧 충전. 토스페이먼츠 주문서형 결제 UI를 그린다. 금액과 승인은 서버가 정하고 확인한다 -->
+    <section id="view-pay" class="page" hidden><div class="page-in">
+      <h2>크레딧 충전</h2>
+      <p class="lead">메시지 한 번에 크레딧 1개를 씁니다. 결제는 토스페이먼츠로 진행됩니다.</p>
+      <p class="lead" id="payMsg" hidden></p>
+      <div class="actions" style="justify-content:flex-start;margin-bottom:16px"><button class="btn primary" id="payRetry" hidden>결제 확인 다시 시도</button></div>
+      <div id="payBody" hidden>
+        <div class="card"><h3>상품</h3><div class="list" id="payProducts"></div></div>
+        <div class="card"><div id="payment-method"></div><div id="agreement"></div></div>
+        <div class="actions"><button class="btn primary" id="payBtn" disabled>결제하기</button></div>
+      </div>
     </div></section>
   </main>
 
@@ -372,12 +385,13 @@ function paintCharacter() {
 
 // ── 화면 전환 ───────────────────────────────────────────────
 function show(view) {
-  for (const v of ["chat", "setup", "memory"]) $("#view-" + v).hidden = v !== view;
+  for (const v of ["chat", "setup", "memory", "pay"]) $("#view-" + v).hidden = v !== view;
   document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.view === view));
-  $("#topSub").textContent = {chat: "대화", setup: "캐릭터 설정", memory: "기억과 약속"}[view];
+  $("#topSub").textContent = {chat: "대화", setup: "캐릭터 설정", memory: "기억과 약속", pay: "크레딧 충전"}[view];
   $("#side").classList.remove("open"); $("#scrim").classList.remove("on");
   if (view === "setup") fillForm();
   if (view === "memory") loadMemory();
+  if (view === "pay") openCheckout();
   if (view === "setup" && cfg.show_turn_panel) previewPrompt();
 }
 document.querySelectorAll(".nav button").forEach(b => b.addEventListener("click", () => show(b.dataset.view)));
@@ -522,6 +536,94 @@ function showCredits(balance) {
 }
 async function loadCredits() {
   try { showCredits((await api("/api/credits")).balance); } catch (err) { console.error(err); }
+}
+$("#credits").onclick = () => show("pay");
+
+// ── 크레딧 충전 (토스페이먼츠 주문서형 결제) ──────────────────────
+// 근거: https://docs.tosspayments.com/guides/v2/payment-widget/integration
+// 화면은 결제 UI를 그리고 결제를 요청만 한다. 주문 금액은 서버가 정하고, 승인은 서버가 시크릿 키로 한다.
+let checkout = null, tossWidgets = null, payProduct = null;
+const won = n => n.toLocaleString("ko-KR") + "원";
+function payMessage(text) { const el = $("#payMsg"); el.textContent = text || ""; el.hidden = !text; }
+
+function loadTossSdk() {
+  return new Promise((resolve, reject) => {
+    if (window.TossPayments) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://js.tosspayments.com/v2/standard";
+    s.onload = resolve; s.onerror = () => reject(new Error("토스페이먼츠 SDK를 불러오지 못했습니다"));
+    document.head.appendChild(s);
+  });
+}
+
+async function pickProduct(id) {
+  payProduct = checkout.products.find(p => p.id === id);
+  await tossWidgets.setAmount({currency: "KRW", value: payProduct.amount});
+  $("#payBtn").textContent = `${won(payProduct.amount)} 결제하기`;
+}
+
+async function openCheckout() {
+  if (!cfg.payments_enabled) return payMessage("지금은 충전할 수 없어요.");
+  const localDev = cfg.env === "local" && cfg.auth === "none";  // 노트북 개발용 사용자는 테스트 결제를 시험할 수 있다(서버도 같은 조건)
+  if (me.anonymous && !localDev) return payMessage("구글 로그인 후 충전할 수 있어요. 게스트 계정은 브라우저 기록을 지우면 산 크레딧도 함께 사라지기 때문이에요.");
+  if (tossWidgets) return;  // 이미 그렸다
+  try {
+    checkout = await api("/api/payments/checkout");
+    $("#payProducts").innerHTML = checkout.products.map((p, i) => `<label class="item"><input type="radio" name="product" value="${p.id}" ${i === 0 ? "checked" : ""}>
+      <span>${esc(p.name)}</span><span class="k">${won(p.amount)}</span></label>`).join("");
+    await loadTossSdk();
+    tossWidgets = TossPayments(checkout.client_key).widgets({customerKey: checkout.customer_key});
+    await pickProduct(checkout.products[0].id);  // 결제 UI를 그리기 전에 금액을 먼저 정한다
+    $("#payBody").hidden = false;
+    await Promise.all([tossWidgets.renderPaymentMethods({selector: "#payment-method"}),
+                       tossWidgets.renderAgreement({selector: "#agreement"})]);
+    $("#payProducts").onchange = e => pickProduct(e.target.value);
+    $("#payBtn").disabled = false;
+  } catch (err) {
+    console.error(err); tossWidgets = null;
+    payMessage("결제 화면을 열지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+  }
+}
+
+$("#payBtn").onclick = async () => {
+  $("#payBtn").disabled = true; payMessage("");
+  try {
+    const order = await api("/api/payments/orders", {method: "POST",
+      body: JSON.stringify({product: payProduct.id, customer_key: checkout.customer_key})});
+    await tossWidgets.setAmount({currency: "KRW", value: order.amount});  // 서버가 정한 금액으로 결제한다
+    await tossWidgets.requestPayment({orderId: order.order_id, orderName: order.order_name,
+      successUrl: location.origin + "/?pay=success", failUrl: location.origin + "/?pay=fail"});
+  } catch (err) {
+    console.error(err);
+    payMessage("결제를 시작하지 못했어요. 다시 시도해 주세요.");
+    $("#payBtn").disabled = false;
+  }
+};
+
+// 결제 인증 뒤 토스가 /?pay=success(paymentKey, orderId, amount) 또는 /?pay=fail(code, message) 로 돌려보낸다
+async function handlePayReturn() {
+  const q = new URLSearchParams(location.search), pay = q.get("pay");
+  if (!pay) return;
+  history.replaceState(null, "", location.pathname);  // 새로고침해도 승인을 다시 보내지 않게 주소를 지운다
+  if (pay === "fail") {
+    show("pay");
+    return payMessage(q.get("code") === "PAY_PROCESS_CANCELED" ? "결제를 취소했어요." : `결제하지 못했어요. ${q.get("message") || ""}`);
+  }
+  await confirmPayment({payment_key: q.get("paymentKey"), order_id: q.get("orderId"), amount: Number(q.get("amount"))});
+}
+
+// 승인 결과를 모르면(503, retry) 서버가 주문을 그대로 두므로, 같은 값으로 다시 보낸다. 인증 뒤 10분 안에 해야 한다
+async function confirmPayment(body) {
+  $("#payRetry").hidden = true;
+  const r = await api("/api/payments/confirm", {method: "POST", raw: true, body: JSON.stringify(body)});
+  const data = await r.json().catch(() => ({}));
+  if (r.ok) { showCredits(data.balance); payMessage(""); alert(`크레딧 ${data.credits.toLocaleString("ko-KR")}개를 충전했어요.`); return; }
+  show("pay");
+  payMessage(`결제를 마무리하지 못했어요. ${data.detail?.message || data.detail || ""}`);
+  if (data.detail?.retry) {
+    $("#payRetry").hidden = false;
+    $("#payRetry").onclick = () => confirmPayment(body).catch(err => { console.error(err); $("#payRetry").hidden = false; });
+  }
 }
 
 $("#form").addEventListener("submit", e => { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; autosize(); send(v); });
@@ -699,6 +801,7 @@ $("#deleteAll").onclick = async () => {
   try { await initAuth(); } catch (err) { console.error(err); alert("로그인을 시작하지 못했습니다. 잠시 뒤 새로고침해 주세요."); return; }
   me = await api("/api/me");
   renderAccount(); loadCredits();
+  try { await handlePayReturn(); } catch (err) { console.error(err); alert("결제 결과를 확인하지 못했습니다. 크레딧이 들어오지 않았다면 문의해 주세요."); }
   character = (await api("/api/character")).character;
   paintCharacter(); refreshCount();
   if (!me.has_character) { $("#setupTitle").textContent = "캐릭터 만들기"; show("setup"); return; }

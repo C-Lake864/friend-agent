@@ -22,6 +22,7 @@ class MemoryStore:
         self.ids = itertools.count(1)
         self.users = {}
         self.credits = []  # 사용자별 저장소와 따로 둔다. delete_all 로 지우지 않는다
+        self.orders = {}  # 결제 주문. order_id → 주문. 크레딧 원장처럼 delete_all 로 지우지 않는다
 
     def _user(self, uid):
         return self.users.setdefault(uid, {
@@ -130,6 +131,32 @@ class MemoryStore:
         """최근 기록부터."""
         mine = [c for c in self.credits if c["user_id"] == uid]
         return [{k: v for k, v in c.items() if k != "user_id"} for c in reversed(mine[-limit:])]
+
+    # 결제 주문
+    def add_payment_order(self, uid, order):
+        o = {**order, "user_id": uid, "status": "ready", "payment_key": None, "fail_code": None,
+             "created_at": utcnow(), "paid_at": None}
+        with self.lock:
+            self.orders[o["order_id"]] = o
+        return dict(o)
+
+    def get_payment_order(self, uid, order_id):
+        """이 사용자의 주문만 찾는다. 남의 주문이면 None."""
+        o = self.orders.get(order_id)
+        return dict(o) if o and o["user_id"] == uid else None
+
+    def finish_payment_order(self, uid, order_id, values):
+        """status 가 ready 인 주문만 바꾼다. 바꿨으면 True(같은 주문을 두 번 처리하지 않게)."""
+        with self.lock:
+            o = self.orders.get(order_id)
+            if not o or o["user_id"] != uid or o["status"] != "ready":
+                return False
+            o.update(values)
+        return True
+
+    def payment_customer_key(self, uid):
+        mine = [o for o in self.orders.values() if o["user_id"] == uid]
+        return mine[-1]["customer_key"] if mine else None
 
     def delete_all(self, uid):
         self.users.pop(uid, None)
