@@ -564,7 +564,8 @@ async function pickProduct(id) {
 
 async function openCheckout() {
   if (!cfg.payments_enabled) return payMessage("지금은 충전할 수 없어요.");
-  if (me.anonymous) return payMessage("구글 로그인 후 충전할 수 있어요. 게스트 계정은 브라우저 기록을 지우면 산 크레딧도 함께 사라지기 때문이에요.");
+  const localDev = cfg.env === "local" && cfg.auth === "none";  // 노트북 개발용 사용자는 테스트 결제를 시험할 수 있다(서버도 같은 조건)
+  if (me.anonymous && !localDev) return payMessage("구글 로그인 후 충전할 수 있어요. 게스트 계정은 브라우저 기록을 지우면 산 크레딧도 함께 사라지기 때문이에요.");
   if (tossWidgets) return;  // 이미 그렸다
   try {
     checkout = await api("/api/payments/checkout");

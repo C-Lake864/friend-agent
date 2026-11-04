@@ -208,10 +208,15 @@ def credits(user: User = Depends(current_user)):
 # ── 크레딧 결제 ────────────────────────────────────────────────────
 # 구글 로그인한 회원만 산다. 게스트는 브라우저 기록을 지우면 계정과 산 크레딧을 잃기 때문이다(docs/decisions.md).
 
+def local_dev_payments():
+    """로그인 기능이 없는 노트북 개발(ENV=local, AUTH=none)에서는 개발용 사용자 한 명이 토스 테스트 결제를 시험할 수 있다."""
+    return settings.env == "local" and settings.auth == "none"
+
+
 def paying_member(user: User = Depends(current_user)):
     if not settings.payments_enabled:
         raise HTTPException(404, "결제가 꺼져 있습니다")
-    if user.anonymous:
+    if user.anonymous and not local_dev_payments():
         raise HTTPException(403, "구글 로그인 후 충전할 수 있습니다")
     return user
 
