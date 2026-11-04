@@ -21,6 +21,7 @@ class MemoryStore:
         self.lock = threading.Lock()
         self.ids = itertools.count(1)
         self.users = {}
+        self.credits = []  # 사용자별 저장소와 따로 둔다. delete_all 로 지우지 않는다
 
     def _user(self, uid):
         return self.users.setdefault(uid, {
@@ -111,6 +112,24 @@ class MemoryStore:
                     r.update(status="delivered", delivered_at=utcnow())
                     claimed.append(dict(r))
         return claimed
+
+    # 크레딧 원장
+    def credit_balance(self, uid):
+        return sum(c["delta"] for c in self.credits if c["user_id"] == uid)
+
+    def add_credit(self, uid, delta, reason, ref):
+        """기록을 하나 더한다. 같은 ref 가 이미 있으면 더하지 않고 False."""
+        with self.lock:
+            if any(c["ref"] == ref for c in self.credits):
+                return False
+            self.credits.append({"id": next(self.ids), "user_id": uid, "delta": int(delta), "reason": reason,
+                                 "ref": ref, "created_at": utcnow()})
+        return True
+
+    def recent_credits(self, uid, limit):
+        """최근 기록부터."""
+        mine = [c for c in self.credits if c["user_id"] == uid]
+        return [{k: v for k, v in c.items() if k != "user_id"} for c in reversed(mine[-limit:])]
 
     def delete_all(self, uid):
         self.users.pop(uid, None)
