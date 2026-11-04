@@ -7,6 +7,7 @@
 - https://docs.tosspayments.com/guides/v2/payment-widget/integration (주문서형 결제 연동하기)
 - https://docs.tosspayments.com/guides/v2/get-started/payment-flow (결제 흐름 이해하기, 결제 정보 검증하기)
 - https://docs.tosspayments.com/guides/v2/get-started/llms-quick-reference (식별자 규칙, 승인 API, Idempotency-Key)
+- https://docs.tosspayments.com/reference/using-api/authorization (멱등키 헤더)
 
 시크릿 키는 이 파일에서만 쓰고, 로그나 응답에 넣지 않는다. 인증 뒤 10분 안에 승인해야 한다.
 """
@@ -14,6 +15,8 @@ import base64
 import uuid
 
 import httpx
+
+from app.logs import log
 
 CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm"
 
@@ -43,13 +46,22 @@ def new_customer_key():
     return str(uuid.uuid4())
 
 
-def confirm(secret_key, payment_key, order_id, amount):
-    """결제 승인 API. 성공하면 Payment 객체(dict), 실패하면 TossError."""
+def new_idempotency_key():
+    """승인 요청 멱등키. 주문을 만들 때 한 번 만들어 저장하고, 그 주문의 승인 요청에는 늘 이 값을 보낸다.
+    토스는 같은 멱등키(+ API 키, 주소, 메서드)의 요청에 첫 응답을 그대로 돌려준다. 최대 300자, 15일 유효."""
+    return str(uuid.uuid4())
+
+
+def confirm(secret_key, payment_key, order_id, amount, idempotency_key):
+    """결제 승인 API. 성공하면 Payment 객체(dict), 실패하면 TossError.
+    에러가 나도 멱등키를 바꿔 다시 보내지 않는다(토스 문서: 원인을 확인한 뒤 재요청)."""
+    # 시크릿 키와 paymentKey 는 로그에 남기지 않는다
+    log("INFO", "결제 승인 요청", order_id=order_id, idempotency_key=idempotency_key)
     token = base64.b64encode(f"{secret_key}:".encode()).decode()  # 시크릿 키 뒤의 콜론을 빠뜨리지 않는다
     try:
         r = httpx.post(CONFIRM_URL, timeout=30,
                        headers={"Authorization": f"Basic {token}", "Content-Type": "application/json",
-                                "Idempotency-Key": str(uuid.uuid4())},
+                                "Idempotency-Key": idempotency_key},
                        json={"paymentKey": payment_key, "orderId": order_id, "amount": amount})
     except httpx.HTTPError as error:
         raise TossError("NETWORK_ERROR", "결제 승인 요청을 보내지 못했습니다.") from error

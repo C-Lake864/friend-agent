@@ -13,6 +13,8 @@ create table if not exists public.payment_orders (
   product text not null,
   credits integer not null check (credits > 0),
   amount integer not null check (amount > 0),
+  idempotency_key text not null check (length(idempotency_key) <= 300),  -- 승인 요청 멱등키. 주문마다 UUID v4 하나
+
   status text not null default 'ready' check (status in ('ready', 'paid', 'failed')),
   payment_key text,                          -- 토스가 준 값 그대로(최대 200자)
   fail_code text,

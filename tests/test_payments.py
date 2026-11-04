@@ -20,7 +20,7 @@ def toss(monkeypatch):
     monkeypatch.setattr(main.settings, "toss_secret_key", "test_gsk_dummy")
     calls = []
 
-    def fake_confirm(secret_key, payment_key, order_id, amount):
+    def fake_confirm(secret_key, payment_key, order_id, amount, idempotency_key):
         calls.append({"payment_key": payment_key, "order_id": order_id, "amount": amount})
         if payment_key == "pk-reject":
             raise payments.TossError("REJECT_CARD_COMPANY", "카드사에서 거절했습니다.")

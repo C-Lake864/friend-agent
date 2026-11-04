@@ -241,7 +241,8 @@ def create_order(req: OrderRequest, user: User = Depends(paying_member)):
         raise HTTPException(400, "결제 화면을 다시 열어 주세요")
     order = store.add_payment_order(user.id, {
         "order_id": payments.new_order_id(), "customer_key": customer_key, "product": req.product,
-        "credits": product["credits"], "amount": product["amount"]})
+        "credits": product["credits"], "amount": product["amount"],
+        "idempotency_key": payments.new_idempotency_key()})
     log("INFO", "결제 주문 생성", product=req.product)
     return {"order_id": order["order_id"], "order_name": product["name"], "amount": order["amount"]}
 
@@ -257,7 +258,8 @@ def confirm_payment(req: ConfirmRequest, user: User = Depends(paying_member)):
         log("WARNING", "결제 금액 불일치", product=order["product"])
         raise HTTPException(400, "결제 금액이 주문과 다릅니다")
     try:
-        payments.confirm(settings.toss_secret_key, req.payment_key, order["order_id"], order["amount"])
+        payments.confirm(settings.toss_secret_key, req.payment_key, order["order_id"], order["amount"],
+                         order["idempotency_key"])
     except payments.TossError as error:
         log("WARNING", "결제 승인 실패", code=error.code)
         if error.code != "ALREADY_PROCESSED_PAYMENT":  # 같은 결제를 다른 요청이 먼저 승인한 경우는 실패로 바꾸지 않는다
