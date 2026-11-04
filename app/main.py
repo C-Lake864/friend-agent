@@ -258,10 +258,13 @@ def confirm_payment(req: ConfirmRequest, user: User = Depends(paying_member)):
         log("WARNING", "결제 금액 불일치", product=order["product"])
         raise HTTPException(400, "결제 금액이 주문과 다릅니다")
     try:
-        payments.confirm(settings.toss_secret_key, req.payment_key, order["order_id"], order["amount"],
-                         order["idempotency_key"])
+        payments.confirm_with_retry(settings.toss_secret_key, req.payment_key, order["order_id"], order["amount"],
+                                    order["idempotency_key"])
     except payments.TossError as error:
-        log("WARNING", "결제 승인 실패", code=error.code)
+        log("WARNING", "결제 승인 실패", code=error.code, retriable=error.retriable)
+        if error.retriable:  # 승인됐는지 모른다. 주문을 ready 로 두고 같은 멱등키로 다시 승인하게 한다
+            raise HTTPException(503, {"code": error.code, "retry": True,
+                                      "message": "결제 확인이 늦어지고 있어요. 잠시 뒤 다시 시도해 주세요."}) from error
         if error.code != "ALREADY_PROCESSED_PAYMENT":  # 같은 결제를 다른 요청이 먼저 승인한 경우는 실패로 바꾸지 않는다
             store.finish_payment_order(user.id, order["order_id"], {"status": "failed", "fail_code": error.code})
         raise HTTPException(400, {"code": error.code, "message": error.message}) from error

@@ -12,6 +12,7 @@
 시크릿 키는 이 파일에서만 쓰고, 로그나 응답에 넣지 않는다. 인증 뒤 10분 안에 승인해야 한다.
 """
 import base64
+import time
 import uuid
 
 import httpx
@@ -19,6 +20,7 @@ import httpx
 from app.logs import log
 
 CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm"
+RETRY_WAITS = (1, 2)  # 결과를 모르는 실패 뒤 같은 멱등키로 다시 보내기 전에 기다리는 초. 인증 뒤 10분 안에 끝나야 한다
 
 # 상품은 서버에서만 정한다. 화면이 보낸 금액은 믿지 않는다
 PRODUCTS = {
@@ -29,11 +31,12 @@ PRODUCTS = {
 
 
 class TossError(Exception):
-    """토스페이먼츠가 돌려준 에러. code 와 message 는 토스 응답 그대로다."""
+    """토스페이먼츠가 돌려준 에러. code 와 message 는 토스 응답 그대로다.
+    retriable 이면 승인됐는지 모르는 실패라서, 주문을 끝내지 않고 같은 멱등키로 다시 승인한다."""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, retriable=False):
         super().__init__(code)
-        self.code, self.message = code, message
+        self.code, self.message, self.retriable = code, message, retriable
 
 
 def new_order_id():
@@ -63,9 +66,27 @@ def confirm(secret_key, payment_key, order_id, amount, idempotency_key):
                        headers={"Authorization": f"Basic {token}", "Content-Type": "application/json",
                                 "Idempotency-Key": idempotency_key},
                        json={"paymentKey": payment_key, "orderId": order_id, "amount": amount})
-    except httpx.HTTPError as error:
-        raise TossError("NETWORK_ERROR", "결제 승인 요청을 보내지 못했습니다.") from error
-    data = r.json() if r.content else {}
+    except httpx.HTTPError as error:  # 연결 실패, 시간 초과. 토스가 승인했는지 모른다
+        raise TossError("NETWORK_ERROR", "결제 승인 응답을 받지 못했습니다.", retriable=True) from error
+    try:
+        data = r.json() if r.content else {}
+    except ValueError:  # 5xx 에서 JSON 이 아닌 본문이 올 수 있다
+        data = {}
     if r.status_code != 200:
-        raise TossError(data.get("code", f"HTTP_{r.status_code}"), data.get("message", "결제를 승인하지 못했습니다."))
+        code = data.get("code", f"HTTP_{r.status_code}")
+        # 5xx 는 "잠시 후 다시 시도"(에러 코드 문서), 409 IDEMPOTENT_REQUEST_PROCESSING 은 이전 요청 처리 중(멱등키 문서)
+        retriable = r.status_code >= 500 or code == "IDEMPOTENT_REQUEST_PROCESSING"
+        raise TossError(code, data.get("message", "결제를 승인하지 못했습니다."), retriable=retriable)
     return data
+
+
+def confirm_with_retry(secret_key, payment_key, order_id, amount, idempotency_key):
+    """결과를 모르는 실패면 RETRY_WAITS 만큼 기다렸다가 같은 멱등키로 다시 보낸다. 마지막 에러는 그대로 올린다."""
+    for wait in (*RETRY_WAITS, None):
+        try:
+            return confirm(secret_key, payment_key, order_id, amount, idempotency_key)
+        except TossError as error:
+            if not error.retriable or wait is None:
+                raise
+            log("WARNING", "결제 승인 재시도", order_id=order_id, code=error.code)
+            time.sleep(wait)

@@ -134,7 +134,8 @@ def test_someone_elses_order_is_not_found_without_calling_toss(toss):
     assert store.get_payment_order(OWNER.id, order["order_id"])["status"] == "ready"
 
 
-@pytest.mark.parametrize("failure", [REJECTED, EXPIRED, INTERNAL], ids=["card-rejected", "session-expired", "toss-500"])
+# 토스 500 처럼 결과를 모르는 실패는 다시 승인할 수 있게 남긴다(tests/test_payment_retry.py)
+@pytest.mark.parametrize("failure", [REJECTED, EXPIRED], ids=["card-rejected", "session-expired"])
 def test_failed_confirm_adds_no_credits_and_passes_toss_error(toss, failure):
     toss.fail = failure
     order = new_order(OWNER, "credits_100")

@@ -294,6 +294,7 @@ textarea.input{min-height:80px;resize:vertical}
       <h2>크레딧 충전</h2>
       <p class="lead">메시지 한 번에 크레딧 1개를 씁니다. 결제는 토스페이먼츠로 진행됩니다.</p>
       <p class="lead" id="payMsg" hidden></p>
+      <div class="actions" style="justify-content:flex-start;margin-bottom:16px"><button class="btn primary" id="payRetry" hidden>결제 확인 다시 시도</button></div>
       <div id="payBody" hidden>
         <div class="card"><h3>상품</h3><div class="list" id="payProducts"></div></div>
         <div class="card"><div id="payment-method"></div><div id="agreement"></div></div>
@@ -607,12 +608,21 @@ async function handlePayReturn() {
     show("pay");
     return payMessage(q.get("code") === "PAY_PROCESS_CANCELED" ? "결제를 취소했어요." : `결제하지 못했어요. ${q.get("message") || ""}`);
   }
-  const r = await api("/api/payments/confirm", {method: "POST", raw: true, body: JSON.stringify({
-    payment_key: q.get("paymentKey"), order_id: q.get("orderId"), amount: Number(q.get("amount"))})});
+  await confirmPayment({payment_key: q.get("paymentKey"), order_id: q.get("orderId"), amount: Number(q.get("amount"))});
+}
+
+// 승인 결과를 모르면(503, retry) 서버가 주문을 그대로 두므로, 같은 값으로 다시 보낸다. 인증 뒤 10분 안에 해야 한다
+async function confirmPayment(body) {
+  $("#payRetry").hidden = true;
+  const r = await api("/api/payments/confirm", {method: "POST", raw: true, body: JSON.stringify(body)});
   const data = await r.json().catch(() => ({}));
-  if (r.ok) { showCredits(data.balance); alert(`크레딧 ${data.credits.toLocaleString("ko-KR")}개를 충전했어요.`); return; }
+  if (r.ok) { showCredits(data.balance); payMessage(""); alert(`크레딧 ${data.credits.toLocaleString("ko-KR")}개를 충전했어요.`); return; }
   show("pay");
   payMessage(`결제를 마무리하지 못했어요. ${data.detail?.message || data.detail || ""}`);
+  if (data.detail?.retry) {
+    $("#payRetry").hidden = false;
+    $("#payRetry").onclick = () => confirmPayment(body).catch(err => { console.error(err); $("#payRetry").hidden = false; });
+  }
 }
 
 $("#form").addEventListener("submit", e => { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; autosize(); send(v); });
