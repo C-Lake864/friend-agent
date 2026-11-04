@@ -165,6 +165,29 @@ class SupabaseStore:
                          order="id.desc", limit=limit)
         return [{**r, "created_at": parse_time(r["created_at"])} for r in rows]
 
+    # 결제 주문
+    def _order(self, row):
+        return {**row, "created_at": parse_time(row["created_at"]), "paid_at": parse_time(row.get("paid_at"))}
+
+    def add_payment_order(self, uid, order):
+        return self._order(self._insert("payment_orders", {**order, "user_id": uid}))
+
+    def get_payment_order(self, uid, order_id):
+        """이 사용자의 주문만 찾는다(user_id 조건). 남의 주문이면 None."""
+        rows = self._get("payment_orders", user_id=f"eq.{uid}", order_id=f"eq.{order_id}")
+        return self._order(rows[0]) if rows else None
+
+    def finish_payment_order(self, uid, order_id, values):
+        """status 가 ready 인 행만 바꾸는 조건부 업데이트. 요청 두 개가 동시에 와도 한쪽만 True."""
+        if values.get("paid_at"):
+            values = {**values, "paid_at": iso(values["paid_at"])}
+        rows = self._update("payment_orders", values, user_id=f"eq.{uid}", order_id=f"eq.{order_id}", status="eq.ready")
+        return bool(rows)
+
+    def payment_customer_key(self, uid):
+        rows = self._get("payment_orders", user_id=f"eq.{uid}", select="customer_key", order="created_at.desc", limit=1)
+        return rows[0]["customer_key"] if rows else None
+
     def delete_all(self, uid):
         for table in ("messages", "summaries", "memories", "reminders", "characters", "user_settings"):
             self._delete(table, user_id=f"eq.{uid}")

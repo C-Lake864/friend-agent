@@ -9,18 +9,21 @@
 - /api/ocr: 사진 속 글자 읽기(OCR_ENABLED=true 일 때)
 - /api/memories, /api/reminders, /api/data: 기억, 약속, 내 데이터 관리
 - /api/credits: 크레딧 잔액과 최근 기록
+- /api/payments/*: 크레딧 결제(토스페이먼츠 주문서형 결제, app/payments.py)
 """
 import html
 import json
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app import agent, ocr, tracing, when
+from app import agent, ocr, payments, tracing, when
 from app.auth import Auth, User
 from app.config import ROOT, load_settings
 from app.llm import make_llm
@@ -84,6 +87,17 @@ class FeedbackRequest(BaseModel):
     liked: bool  # 좋아요 true, 별로예요 false
 
 
+class OrderRequest(BaseModel):
+    product: str
+    customer_key: str  # 화면이 결제 UI를 초기화할 때 쓴 값. 이미 정해진 값이 있으면 그 값을 쓴다
+
+
+class ConfirmRequest(BaseModel):
+    payment_key: str = Field(min_length=1, max_length=200)  # 토스가 준 값 그대로. 형식은 검사하지 않는다
+    order_id: str = Field(min_length=6, max_length=64)
+    amount: int
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     page = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -112,7 +126,7 @@ def config():
             "supabase_url": settings.supabase_url if settings.auth == "supabase" else "",
             "supabase_publishable_key": settings.supabase_publishable_key if settings.auth == "supabase" else "",
             "google_login": settings.google_login, "show_turn_panel": settings.show_turn_panel,
-            "ocr_enabled": settings.ocr_enabled,
+            "ocr_enabled": settings.ocr_enabled, "payments_enabled": settings.payments_enabled,
             "options": OPTIONS, "cities": list(CITIES)}
 
 
@@ -189,6 +203,72 @@ def credits(user: User = Depends(current_user)):
     return {"balance": balance,
             "history": [{"delta": c["delta"], "reason": c["reason"], "ref": c["ref"],
                          "created_at": c["created_at"].isoformat()} for c in store.recent_credits(user.id, 10)]}
+
+
+# ── 크레딧 결제 ────────────────────────────────────────────────────
+# 구글 로그인한 회원만 산다. 게스트는 브라우저 기록을 지우면 계정과 산 크레딧을 잃기 때문이다(docs/decisions.md).
+
+def paying_member(user: User = Depends(current_user)):
+    if not settings.payments_enabled:
+        raise HTTPException(404, "결제가 꺼져 있습니다")
+    if user.anonymous:
+        raise HTTPException(403, "구글 로그인 후 충전할 수 있습니다")
+    return user
+
+
+def is_uuid(value):
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
+@app.get("/api/payments/checkout")
+def checkout(user: User = Depends(paying_member)):
+    # 첫 결제 전에는 새 값을 주고, 첫 주문을 만들 때 저장한다
+    return {"client_key": settings.toss_client_key,
+            "customer_key": store.payment_customer_key(user.id) or payments.new_customer_key(),
+            "products": [{"id": pid, **p} for pid, p in payments.PRODUCTS.items()]}
+
+
+@app.post("/api/payments/orders")
+def create_order(req: OrderRequest, user: User = Depends(paying_member)):
+    product = payments.PRODUCTS.get(req.product)
+    if not product:
+        raise HTTPException(400, "없는 상품입니다")
+    customer_key = store.payment_customer_key(user.id) or (req.customer_key if is_uuid(req.customer_key) else None)
+    if not customer_key:
+        raise HTTPException(400, "결제 화면을 다시 열어 주세요")
+    order = store.add_payment_order(user.id, {
+        "order_id": payments.new_order_id(), "customer_key": customer_key, "product": req.product,
+        "credits": product["credits"], "amount": product["amount"]})
+    log("INFO", "결제 주문 생성", product=req.product)
+    return {"order_id": order["order_id"], "order_name": product["name"], "amount": order["amount"]}
+
+
+@app.post("/api/payments/confirm")
+def confirm_payment(req: ConfirmRequest, user: User = Depends(paying_member)):
+    order = store.get_payment_order(user.id, req.order_id)
+    if not order:
+        raise HTTPException(404, "주문을 찾지 못했습니다")
+    if order["status"] != "ready":
+        raise HTTPException(409, "이미 처리된 주문입니다")
+    if req.amount != order["amount"]:  # 화면에서 금액을 바꿨다. 승인하지 않으면 결제되지 않는다
+        log("WARNING", "결제 금액 불일치", product=order["product"])
+        raise HTTPException(400, "결제 금액이 주문과 다릅니다")
+    try:
+        payments.confirm(settings.toss_secret_key, req.payment_key, order["order_id"], order["amount"])
+    except payments.TossError as error:
+        log("WARNING", "결제 승인 실패", code=error.code)
+        if error.code != "ALREADY_PROCESSED_PAYMENT":  # 같은 결제를 다른 요청이 먼저 승인한 경우는 실패로 바꾸지 않는다
+            store.finish_payment_order(user.id, order["order_id"], {"status": "failed", "fail_code": error.code})
+        raise HTTPException(400, {"code": error.code, "message": error.message}) from error
+    # 돈이 빠져나갔으니 크레딧은 꼭 더한다. ref 가 주문번호라 두 번 더해지지 않는다
+    store.add_credit(user.id, order["credits"], "purchase", f"payment:{order['order_id']}")
+    store.finish_payment_order(user.id, order["order_id"], {
+        "status": "paid", "payment_key": req.payment_key, "paid_at": datetime.now(timezone.utc)})
+    log("INFO", "결제 승인", product=order["product"])
+    return {"ok": True, "credits": order["credits"], "balance": store.credit_balance(user.id)}
 
 
 @app.post("/api/chat")
