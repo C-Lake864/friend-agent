@@ -74,3 +74,8 @@
 선택: 결제는 회원만이라는 규칙에 예외 하나를 둔다. ENV=local 이고 AUTH=none 이면 개발용 사용자(local-user)도 결제 API를 쓸 수 있다. 화면도 같은 조건에서 충전 화면을 연다. staging·production·test 환경의 게스트는 지금처럼 403. 버린 대안: production 이 쓰는 Supabase 프로젝트로 로컬 테스트하기, 시험용 Supabase 프로젝트와 구글 로그인을 먼저 만들기.
 이유: 사용자가 "최대한 편하게"를 요청해 추천안(직접 할 일이 가장 적은 방법)으로 정했다. AUTH=none 의 사용자는 로그인 기능이 없는 개발용 한 명이라 "기록을 지우면 크레딧을 잃는 게스트"와 다르다. 이렇게 하면 .env 에 토스 테스트 키 두 줄만 넣으면 실제 토스 테스트 결제를 확인할 수 있고, production DB에 테스트 데이터가 섞이지 않는다. 설정 검사(config.py)가 STORAGE=supabase 와 AUTH=none 조합을 막아 이 예외는 메모리 저장소에서만 동작한다.
 다시 볼 조건: staging 을 AUTH=none 으로 두고 ENV 값을 local 로 바꾸는 일이 생길 때(그러면 공개된 서비스에서 누구나 결제 API를 쓸 수 있다). 시험용 Supabase 와 구글 로그인이 준비돼 실제 회원 흐름으로 테스트할 수 있을 때.
+
+## 2026-11-04 -- 서버 접속 로그에서 결제 복귀 주소의 paymentKey 를 가린다
+선택: uvicorn 접속 로그(uvicorn.access)에 필터를 붙여 주소의 paymentKey 값을 [가림]으로 바꾼다. 다른 쿼리(orderId, amount)와 다른 요청 로그는 그대로 둔다. 버린 대안: PC 에서 Promise 방식으로 결제를 받아 주소에 paymentKey 가 실리지 않게 하기, Cloud Logging 제외 필터로 결제 복귀 요청 로그를 빼기.
+이유: 로컬 샌드박스 결제에서 토스가 /?pay=success&...&paymentKey=... 로 돌려보내고 접속 로그가 주소 전체를 남기는 것을 확인했다. 앞서 정한 "paymentKey 전체는 로그에 남기지 않는다"와 어긋난다. 토스 SDK 문서상 리다이렉트 방식은 항상 쿼리로 값을 붙이고, Promise 방식은 모바일에서 쓸 수 없다. 사용자가 질문 카드에서 추천안을 골랐다.
+다시 볼 조건: Cloud Run 요청 로그(Google 쪽 httpRequest.requestUrl)에도 paymentKey 가 남는 것이 문제가 될 때(앱 코드로는 막을 수 없어 로그 제외 필터나 Promise 방식을 다시 검토한다). 토스 문서는 paymentKey 가 시크릿 키 없이는 쓸 수 없어 노출돼도 괜찮다고 한다.

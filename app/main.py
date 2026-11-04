@@ -27,7 +27,7 @@ from app import agent, ocr, payments, tracing, when
 from app.auth import Auth, User
 from app.config import ROOT, load_settings
 from app.llm import make_llm
-from app.logs import log
+from app.logs import hide_payment_key_in_access_log, log
 from app.persona import DEFAULT_CHARACTER, OPTIONS, build_persona, clean_character
 from app.safety import is_crisis
 from app.store.base import make_store
@@ -37,6 +37,7 @@ settings = load_settings()  # 꼭 필요한 값이 없으면 여기서 종료한
 llm = make_llm(settings)
 store = make_store(settings)
 current_user = Auth(settings)
+hide_payment_key_in_access_log()  # uvicorn 이 로그 설정을 마친 뒤 앱을 불러오므로 여기서 붙여도 지워지지 않는다
 log("INFO", "Langfuse 기록", enabled=tracing.enabled())
 
 
