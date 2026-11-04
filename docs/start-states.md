@@ -10,16 +10,19 @@
 | Cloud Run 첫 배포 ② | Google Cloud 프로젝트, gcloud 로그인과 프로젝트·리전 설정, API 4개 사용 설정, 템플릿으로 만든 내 저장소 | 아래 A | 20~40분 |
 | | `friend-agent` 서비스가 비밀값 `llm-api-key` 를 참조해 배포되어 있음 | 아래 B | 15분 |
 | 자동 배포 | (위와 같음) | | |
-| 자동 검사와 환경 분리 | 배포용·실행용 서비스 계정과 Workload Identity 설정, 저장소 변수 4개 | `docs/wif-setup.md` 0~4단계와 7단계 | 30분 |
+| 자동 검사와 환경 분리 | 배포용·실행용·빌드용 서비스 계정과 Workload Identity 설정, 저장소 변수 5개 | `docs/wif-setup.md` 0~4단계와 7단계 | 30분 |
 | | `.github/workflows/deploy.yml` 이 main 머지 때 배포함 | 아래 C | 10분 |
 | Dockerfile | `.github/workflows/ci.yml`, staging·production 으로 나눠 배포하는 `deploy.yml` | 아래 D | 15분 |
 | | GitHub 환경 `staging`·`production`(변수 SERVICE, ENV. production 은 배포 승인자 지정), `staging` 브랜치 | 아래 D | 15분 |
 | | `friend-agent-staging` 서비스 (공개, 비밀값 연결) | 아래 E | 10분 |
 | 이미지 배포 | 저장소 루트의 `Dockerfile`, `.dockerignore` | 아래 F | 5분 |
-| 무중단 배포 | Actions에서 이미지를 만들어 배포하는 `deploy.yml`, Artifact Registry 저장소 `friend-agent` 와 쓰기 권한, 저장소 변수 `AR_REPO` | 아래 G | 15분 |
-| 카나리와 메인 퀘스트 | `deploy.yml` 의 배포 단계에 `/health` 시작 확인 설정 | 아래 H | 5분 |
+| 무중단 배포 | 저장소 루트의 `Dockerfile` 로 만든 이미지 `friend-agent:local`. 내 컴퓨터의 Docker로만 진행하므로 Google Cloud 쪽 상태는 없어도 된다 | 저장소 루트에서 `docker build -t friend-agent:local .` | 5분 |
+| 블루그린과 카나리 | Actions에서 이미지를 만들어 배포하는 `deploy.yml`, Artifact Registry 저장소 `friend-agent` 와 쓰기 권한, 저장소 변수 `AR_REPO` | 아래 G | 15분 |
+| | Supabase 시험용 프로젝트(테이블, 익명 로그인) | `docs/supabase.md` 1단계 | 15분 |
+| 그 뒤의 실습 | `deploy.yml` 의 배포 단계에 `/health` 시작 확인 설정 | 아래 H | 5분 |
+| | staging·production 서비스가 Supabase(데이터베이스와 익명 로그인)에 연결됨 | 아래 I | 40분 |
 
-Supabase(데이터베이스와 로그인)는 "공개 준비" 실습에서 구글 로그인과 함께 붙인다. 그 전 실습은 모두 Supabase 없이 진행한다(서버 메모리 저장). 붙이는 절차는 `docs/supabase.md`.
+Supabase(데이터베이스와 익명 로그인)는 "무중단 배포" 실습에서 시험용 프로젝트를 만들어 내 컴퓨터의 컨테이너에 붙이고, "블루그린과 카나리" 실습에서 staging·production 서비스에 연결한다. 시작 확인 설정(H)도 "블루그린과 카나리" 실습 안에서 한다. 그 전 실습은 모두 Supabase 없이 진행한다(서버 메모리 저장). 구글 로그인은 "공개 준비" 실습에서 더한다. 붙이는 절차는 `docs/supabase.md`.
 
 ## A. Google Cloud와 저장소
 
@@ -110,6 +113,10 @@ flags: --service-account=${{ vars.RUNTIME_SA }} --startup-probe=httpGet.path=/he
 ```
 
 PR로 올려 배포한 뒤, 콘솔의 리비전 상세에서 시작 확인이 `/health` 로 설정되었는지 본다.
+
+## I. Supabase 연결
+
+`docs/supabase.md` 의 1~3단계를 staging 과 production 에 한 번씩 진행한다. secret key 는 Secret Manager의 `supabase-secret-staging`, `supabase-secret-production` 에 넣고, 실행용 서비스 계정에 두 비밀값 각각의 읽기 권한을 준다. 확인: 화면 왼쪽 아래에 "게스트로 사용 중"이 보이고, 새 리비전을 배포한 뒤에도 대화가 남는다.
 
 ## 템플릿이 바뀌었을 때
 
