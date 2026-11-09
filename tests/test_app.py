@@ -68,3 +68,11 @@ def test_cannot_react_to_someone_elses_or_own_user_message():
     assert client.post("/api/report", json={"message_id": others["id"]}).status_code == 404
     mine = store.add_message("local-user", "user", "내가 보낸 말")
     assert client.post("/api/feedback", json={"message_id": mine["id"], "liked": True}).status_code == 404
+
+
+def test_crisis_keywords_catch_clear_intent_but_not_everyday_words():
+    from app.safety import is_crisis
+    for text in ("옥상에서 뛰어내리고 싶다는 생각이 계속 들어", "유서를 써 놨어", "약을 모아 두고 있어"):
+        assert is_crisis(text), text
+    for text in ("유서 깊은 카페에 갔어", "배고파 죽겠다", "지구를 떠나야겠다", "과제 때문에 미치겠다"):
+        assert not is_crisis(text), text
